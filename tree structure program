@@ -1,0 +1,160 @@
+#include <iostream>
+#include <string>
+#include <vector>
+#include <memory>
+#include <stack>
+#include <algorithm>
+#include <iomanip>
+
+struct ProductNode {
+    int id;
+    std::string name;
+    bool is_leaf;
+    double popularity;
+    double rating;
+    double price;
+
+    ProductNode* parent = nullptr;
+    std::vector<std::shared_ptr<ProductNode>> children;
+
+    ProductNode(int id, std::string nm, bool leaf, double pop,
+                double rat = 0.0, double pr = 0.0)
+        : id(id), name(std::move(nm)), is_leaf(leaf),
+          popularity(pop), rating(rat), price(pr) {}
+
+    void addChild(std::shared_ptr<ProductNode> child) {
+        child->parent = this;
+        children.push_back(std::move(child));
+    }
+
+    double compositeScore() const {
+        return 0.6 * popularity + 0.4 * (rating / 5.0);
+    }
+};
+
+class ProductTree {
+public:
+    std::shared_ptr<ProductNode> root;
+
+    explicit ProductTree(std::shared_ptr<ProductNode> r)
+        : root(std::move(r)) {}
+
+    ProductNode* find(int target_id) const {
+        if (!root) return nullptr;
+        std::stack<ProductNode*> stk;
+        stk.push(root.get());
+        while (!stk.empty()) {
+            auto* node = stk.top(); stk.pop();
+            if (node->id == target_id) return node;
+            for (auto& child : node->children)
+                stk.push(child.get());
+        }
+        return nullptr;
+    }
+
+    void collectLeaves(ProductNode* node,
+                       std::vector<ProductNode*>& out) const {
+        if (!node) return;
+        if (node->is_leaf) { out.push_back(node); return; }
+        for (auto& c : node->children)
+            collectLeaves(c.get(), out);
+    }
+
+    std::vector<ProductNode*> recommend(int cat_id, int top_n = 5) const {
+        ProductNode* cat = find(cat_id);
+        if (!cat) return {};
+
+        std::vector<ProductNode*> leaves;
+        collectLeaves(cat, leaves);
+
+        std::sort(leaves.begin(), leaves.end(),
+            [](ProductNode* a, ProductNode* b) {
+                return a->compositeScore() > b->compositeScore();
+            });
+
+        if ((int)leaves.size() > top_n)
+            leaves.resize(top_n);
+        return leaves;
+    }
+
+    void printTree(ProductNode* node, int depth = 0,
+                   bool is_last = true,
+                   const std::string& prefix = "") const {
+        if (!node) return;
+        std::string connector = (depth == 0) ? "" : (is_last ? "└── " : "├── ");
+        std::string icon = node->is_leaf ? "🛒 " : "📁 ";
+        std::cout << prefix << connector << icon << node->name;
+        if (node->is_leaf)
+            std::cout << "  [pop=" << std::fixed << std::setprecision(2)
+                      << node->popularity << " | ★" << node->rating
+                      << " | $" << node->price << "]";
+        std::cout << "\n";
+        std::string child_prefix = prefix + (depth == 0 ? "" : (is_last ? "    " : "│   "));
+        for (size_t i = 0; i < node->children.size(); ++i)
+            printTree(node->children[i].get(), depth + 1,
+                      i == node->children.size() - 1, child_prefix);
+    }
+};
+
+std::shared_ptr<ProductNode> buildSampleTree() {
+    auto root = std::make_shared<ProductNode>(0, "All Products", false, 1.0);
+
+    auto elec = std::make_shared<ProductNode>(1, "Electronics", false, 0.85);
+
+    auto phones = std::make_shared<ProductNode>(2, "Phones", false, 0.90);
+    phones->addChild(std::make_shared<ProductNode>(10, "iPhone 16", true, 0.95, 4.8, 999.0));
+    phones->addChild(std::make_shared<ProductNode>(11, "Galaxy S25", true, 0.88, 4.7, 899.0));
+    phones->addChild(std::make_shared<ProductNode>(12, "Pixel 9", true, 0.78, 4.5, 799.0));
+    phones->addChild(std::make_shared<ProductNode>(13, "OnePlus 13", true, 0.65, 4.3, 699.0));
+    elec->addChild(phones);
+
+    auto laptops = std::make_shared<ProductNode>(3, "Laptops", false, 0.80);
+    laptops->addChild(std::make_shared<ProductNode>(14, "MacBook Pro M4", true, 0.91, 4.9, 1999.0));
+    laptops->addChild(std::make_shared<ProductNode>(15, "Dell XPS 15", true, 0.72, 4.4, 1499.0));
+    laptops->addChild(std::make_shared<ProductNode>(16, "ThinkPad X1", true, 0.68, 4.3, 1299.0));
+    elec->addChild(laptops);
+
+    auto audio = std::make_shared<ProductNode>(4, "Audio", false, 0.75);
+    audio->addChild(std::make_shared<ProductNode>(17, "Sony WH-1000XM6", true, 0.84, 4.7, 349.0));
+    audio->addChild(std::make_shared<ProductNode>(18, "AirPods Pro 3", true, 0.89, 4.6, 279.0));
+    elec->addChild(audio);
+
+    root->addChild(elec);
+
+    auto cloth = std::make_shared<ProductNode>(5, "Clothing", false, 0.70);
+
+    auto shoes = std::make_shared<ProductNode>(6, "Shoes", false, 0.76);
+    shoes->addChild(std::make_shared<ProductNode>(20, "Nike Air Max", true, 0.82, 4.6, 130.0));
+    shoes->addChild(std::make_shared<ProductNode>(21, "Adidas Ultraboost", true, 0.79, 4.5, 180.0));
+    cloth->addChild(shoes);
+
+    auto tops = std::make_shared<ProductNode>(7, "Tops", false, 0.65);
+    tops->addChild(std::make_shared<ProductNode>(22, "Levi's Denim Jacket", true, 0.61, 4.2, 89.0));
+    tops->addChild(std::make_shared<ProductNode>(23, "Uniqlo Flannel", true, 0.55, 4.1, 49.0));
+    cloth->addChild(tops);
+
+    root->addChild(cloth);
+
+    auto books = std::make_shared<ProductNode>(8, "Books", false, 0.60);
+    books->addChild(std::make_shared<ProductNode>(30, "Clean Code", true, 0.77, 4.8, 35.0));
+    books->addChild(std::make_shared<ProductNode>(31, "The Pragmatic Prog.", true, 0.70, 4.7, 40.0));
+    books->addChild(std::make_shared<ProductNode>(32, "CLRS Algorithms", true, 0.58, 4.5, 55.0));
+    root->addChild(books);
+
+    return root;
+}
+
+int main() {
+    ProductTree tree(buildSampleTree());
+
+    tree.printTree(tree.root.get());
+
+    auto recs = tree.recommend(2, 3);
+
+    for (auto* p : recs) {
+        std::cout << p->name << " "
+                  << p->compositeScore() << "\n";
+    }
+
+    return 0;
+}

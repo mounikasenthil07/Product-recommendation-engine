@@ -1,1 +1,487 @@
 
+/*
+ * ============================================================
+ *   PRODUCT RECOMMENDATION ENGINE — C++ Tree Data Structure
+ *         Mapped to UN Sustainable Development Goals (SDGs)
+ * ============================================================
+ *
+ *  SDG MAPPINGS:
+ *  ─────────────────────────────────────────────────────────
+ *  SDG  1 – No Poverty          : Recommends affordable products
+ *  SDG  8 – Decent Work         : Promotes local/fair-trade items
+ *  SDG  9 – Industry/Innovation : Tree-based algorithmic innovation
+ *  SDG 10 – Reduced Inequalities: Inclusive pricing across categories
+ *  SDG 12 – Responsible Consumption: Eco-label + sustainability score
+ *  SDG 17 – Partnerships        : Open data / shared platform
+ *
+ *  PROBLEM STATEMENT:
+ *    An inclusive e-commerce platform must recommend products
+ *    that balance user preference (popularity, rating) with
+ *    sustainability criteria (eco-score, fair-trade flag) and
+ *    affordability — directly supporting SDG 1, 10, 12.
+ *
+ *  ALGORITHM:
+ *    Composite Score = w1*popularity + w2*(rating/5)
+ *                    + w3*eco_score  + w4*affordability_score
+ *    where w1=0.35, w2=0.25, w3=0.25, w4=0.15
+ *
+ *  Compile: g++ -std=c++17 -o sdg_rec product_recommendation_sdg.cpp
+ *  Run:     ./sdg_rec
+ * ============================================================
+ */
+
+#include <iostream>
+#include <string>
+#include <vector>
+#include <memory>
+#include <stack>
+#include <algorithm>
+#include <iomanip>
+#include <map>
+
+// ─────────────────────────────────────────────────────────────
+//  SDG TAG — attaches goal metadata to each node / product
+// ─────────────────────────────────────────────────────────────
+struct SDGTag {
+    int    number;      // 1-17
+    std::string label;  // short name
+    std::string reason; // why this node supports the goal
+};
+
+// ─────────────────────────────────────────────────────────────
+//  PRODUCT NODE — core tree data structure
+// ─────────────────────────────────────────────────────────────
+struct ProductNode {
+    int         id;
+    std::string name;
+    bool        is_leaf;      // true = product, false = category
+
+    // Recommendation fields (leaf nodes)
+    double popularity   = 0.0; // 0–1  click-through rate
+    double rating       = 0.0; // 0–5  user review avg
+    double eco_score    = 0.0; // 0–1  sustainability score    (SDG 12)
+    double price        = 0.0; // USD
+    double max_price    = 1000.0; // for affordability normalisation (SDG 1, 10)
+    bool   fair_trade   = false;  // local/fair-trade flag      (SDG 8)
+    bool   inclusive    = false;  // accessible to low-income   (SDG 10)
+
+    // SDG annotations
+    std::vector<SDGTag> sdg_tags;
+
+    // Tree links
+    ProductNode* parent = nullptr;
+    std::vector<std::shared_ptr<ProductNode>> children;
+
+    // Constructor for categories
+    ProductNode(int id, std::string nm, bool leaf)
+        : id(id), name(std::move(nm)), is_leaf(leaf) {}
+
+    // Add child
+    void addChild(std::shared_ptr<ProductNode> c) {
+        c->parent = this;
+        children.push_back(std::move(c));
+    }
+
+    // Tag this node with an SDG
+    void tag(int num, const std::string& lbl, const std::string& reason) {
+        sdg_tags.push_back({num, lbl, reason});
+    }
+
+    // Affordability score: cheaper = higher score (SDG 1, 10)
+    double affordabilityScore() const {
+        if (price <= 0 || max_price <= 0) return 0.5;
+        return 1.0 - std::min(1.0, price / max_price);
+    }
+
+    // Composite SDG-aware recommendation score
+    double compositeScore() const {
+        double fair_bonus = fair_trade ? 0.05 : 0.0;   // SDG 8
+        return 0.35 * popularity
+             + 0.25 * (rating / 5.0)
+             + 0.25 * eco_score                         // SDG 12
+             + 0.15 * affordabilityScore()              // SDG 1, 10
+             + fair_bonus;                              // SDG 8
+    }
+
+    // SDG numbers this node is tagged with
+    std::string sdgList() const {
+        std::string out;
+        for (size_t i = 0; i < sdg_tags.size(); ++i) {
+            if (i) out += ", ";
+            out += "SDG " + std::to_string(sdg_tags[i].number);
+        }
+        return out.empty() ? "—" : out;
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+//  PRODUCT TREE
+// ─────────────────────────────────────────────────────────────
+class ProductTree {
+public:
+    std::shared_ptr<ProductNode> root;
+
+    explicit ProductTree(std::shared_ptr<ProductNode> r)
+        : root(std::move(r)) {}
+
+    // Iterative DFS find — O(n)
+    ProductNode* find(int target_id) const {
+        if (!root) return nullptr;
+        std::stack<ProductNode*> stk;
+        stk.push(root.get());
+        while (!stk.empty()) {
+            auto* n = stk.top(); stk.pop();
+            if (n->id == target_id) return n;
+            for (auto& c : n->children) stk.push(c.get());
+        }
+        return nullptr;
+    }
+
+    // Recursive leaf collection — O(k)
+    void collectLeaves(ProductNode* node,
+                       std::vector<ProductNode*>& out) const {
+        if (!node) return;
+        if (node->is_leaf) { out.push_back(node); return; }
+        for (auto& c : node->children) collectLeaves(c.get(), out);
+    }
+
+    // SDG-aware top-N recommendations — O(k log k)
+    std::vector<ProductNode*> recommend(int cat_id, int top_n = 5,
+                                        int sdg_filter = 0) const {
+        auto* cat = find(cat_id);
+        if (!cat) return {};
+        std::vector<ProductNode*> leaves;
+        collectLeaves(cat, leaves);
+
+        // Optional: filter by SDG number
+        if (sdg_filter > 0) {
+            leaves.erase(
+                std::remove_if(leaves.begin(), leaves.end(),
+                    [sdg_filter](ProductNode* p) {
+                        for (auto& t : p->sdg_tags)
+                            if (t.number == sdg_filter) return false;
+                        return true;
+                    }),
+                leaves.end());
+        }
+
+        std::sort(leaves.begin(), leaves.end(),
+            [](ProductNode* a, ProductNode* b) {
+                return a->compositeScore() > b->compositeScore();
+            });
+
+        if ((int)leaves.size() > top_n) leaves.resize(top_n);
+        return leaves;
+    }
+
+    // Collect all unique SDG tags across the whole tree
+    void collectSDGSummary(ProductNode* node,
+                           std::map<int,std::string>& summary) const {
+        if (!node) return;
+        for (auto& t : node->sdg_tags)
+            summary[t.number] = t.label;
+        for (auto& c : node->children) collectSDGSummary(c.get(), summary);
+    }
+
+    // Pretty-print the tree
+    void printTree(ProductNode* node, int depth = 0,
+                   bool is_last = true,
+                   const std::string& prefix = "") const {
+        if (!node) return;
+        std::string conn = (depth == 0) ? "" : (is_last ? "└── " : "├── ");
+        std::string icon = node->is_leaf ? "🛒 " : "📁 ";
+        std::cout << prefix << conn << icon << node->name;
+        if (node->is_leaf) {
+            std::cout << std::fixed << std::setprecision(2)
+                      << "  [pop=" << node->popularity
+                      << " | ★"    << node->rating
+                      << " | eco=" << node->eco_score
+                      << " | $"    << node->price
+                      << (node->fair_trade ? " | FT✓" : "")
+                      << " | " << node->sdgList() << "]";
+        } else {
+            if (!node->sdg_tags.empty())
+                std::cout << "  [" << node->sdgList() << "]";
+        }
+        std::cout << "\n";
+        std::string child_prefix =
+            prefix + (depth == 0 ? "" : (is_last ? "    " : "│   "));
+        for (size_t i = 0; i < node->children.size(); ++i)
+            printTree(node->children[i].get(), depth + 1,
+                      i == node->children.size() - 1, child_prefix);
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+//  BUILD TREE — categories and products with SDG tags
+// ─────────────────────────────────────────────────────────────
+std::shared_ptr<ProductNode> buildSDGTree() {
+    auto root = std::make_shared<ProductNode>(0, "All Products", false);
+    root->tag(9,  "Industry & Innovation", "Platform enables algorithmic innovation");
+    root->tag(17, "Partnerships",          "Open recommendation data shared across sellers");
+
+    // ── Electronics ──────────────────────────────────────────
+    auto elec = std::make_shared<ProductNode>(1, "Electronics", false);
+    elec->tag(9, "Industry & Innovation", "Tech products drive industrial innovation");
+
+    auto phones = std::make_shared<ProductNode>(2, "Phones", false);
+    phones->tag(9, "Innovation", "Smartphone technology enabler");
+
+    auto p1 = std::make_shared<ProductNode>(10, "iPhone 16",   true);
+    p1->popularity=0.95; p1->rating=4.8; p1->eco_score=0.55; p1->price=999;  p1->max_price=1500;
+    p1->tag(9, "Industry", "Premium tech innovation");
+
+    auto p2 = std::make_shared<ProductNode>(11, "Galaxy S25",  true);
+    p2->popularity=0.88; p2->rating=4.7; p2->eco_score=0.62; p2->price=899;  p2->max_price=1500;
+    p2->tag(9,  "Innovation",     "Flagship Android innovation");
+    p2->tag(12, "Responsible Consumption", "Higher eco-score vs competitor");
+
+    auto p3 = std::make_shared<ProductNode>(12, "Pixel 9",     true);
+    p3->popularity=0.78; p3->rating=4.5; p3->eco_score=0.70; p3->price=799;  p3->max_price=1500;
+    p3->tag(9,  "Innovation",            "AI-first hardware");
+    p3->tag(12, "Responsible Consumption","70% eco-score certified");
+
+    auto p4 = std::make_shared<ProductNode>(13, "Budget 5G",   true);
+    p4->popularity=0.60; p4->rating=4.1; p4->eco_score=0.50; p4->price=199;
+    p4->inclusive=true; p4->max_price=1500;
+    p4->tag(1,  "No Poverty",            "Affordable smartphone for all");
+    p4->tag(10, "Reduced Inequalities",  "Low-cost device bridges digital divide");
+
+    phones->addChild(p1); phones->addChild(p2);
+    phones->addChild(p3); phones->addChild(p4);
+    elec->addChild(phones);
+
+    auto laptops = std::make_shared<ProductNode>(3, "Laptops", false);
+    laptops->tag(9, "Innovation", "Productivity & education hardware");
+
+    auto l1 = std::make_shared<ProductNode>(14, "MacBook Pro M4",  true);
+    l1->popularity=0.91; l1->rating=4.9; l1->eco_score=0.68; l1->price=1999; l1->max_price=2500;
+    l1->tag(9,  "Innovation",            "High-performance creative tool");
+    l1->tag(12, "Responsible Consumption","Apple carbon-neutral packaging");
+
+    auto l2 = std::make_shared<ProductNode>(15, "Education Laptop", true);
+    l2->popularity=0.65; l2->rating=4.3; l2->eco_score=0.75; l2->price=350;
+    l2->inclusive=true; l2->max_price=2500;
+    l2->tag(4,  "Quality Education",     "Affordable for students");
+    l2->tag(10, "Reduced Inequalities",  "Low-income household target");
+    l2->tag(12, "Responsible Consumption","75% recycled materials");
+
+    laptops->addChild(l1); laptops->addChild(l2);
+    elec->addChild(laptops);
+    root->addChild(elec);
+
+    // ── Sustainable Goods ─────────────────────────────────────
+    auto sust = std::make_shared<ProductNode>(4, "Sustainable Goods", false);
+    sust->tag(12, "Responsible Consumption", "Category dedicated to eco products");
+    sust->tag(13, "Climate Action",          "Low-carbon product range");
+
+    auto s1 = std::make_shared<ProductNode>(20, "Bamboo Water Bottle", true);
+    s1->popularity=0.72; s1->rating=4.6; s1->eco_score=0.95; s1->price=25;
+    s1->fair_trade=true; s1->max_price=100;
+    s1->tag(12, "Responsible Consumption","95% biodegradable, plastic-free");
+    s1->tag(13, "Climate Action",         "Zero single-use plastic");
+    s1->tag(8,  "Decent Work",            "Fair-trade certified producer");
+
+    auto s2 = std::make_shared<ProductNode>(21, "Solar Lantern", true);
+    s2->popularity=0.58; s2->rating=4.4; s2->eco_score=0.92; s2->price=18;
+    s2->fair_trade=true; s2->inclusive=true; s2->max_price=100;
+    s2->tag(7,  "Affordable Clean Energy","Solar-powered, off-grid use");
+    s2->tag(1,  "No Poverty",             "Affordable lighting for rural homes");
+    s2->tag(12, "Responsible Consumption","92% eco-score");
+
+    auto s3 = std::make_shared<ProductNode>(22, "Organic Cotton Tote", true);
+    s3->popularity=0.66; s3->rating=4.2; s3->eco_score=0.88; s3->price=15;
+    s3->fair_trade=true; s3->max_price=100;
+    s3->tag(12, "Responsible Consumption","100% organic, fair-trade");
+    s3->tag(8,  "Decent Work",            "Artisan cooperative certified");
+
+    sust->addChild(s1); sust->addChild(s2); sust->addChild(s3);
+    root->addChild(sust);
+
+    // ── Food & Agriculture ────────────────────────────────────
+    auto food = std::make_shared<ProductNode>(5, "Food & Agriculture", false);
+    food->tag(2, "Zero Hunger",           "Food security category");
+    food->tag(12, "Responsible Consumption","Sustainable food sourcing");
+
+    auto f1 = std::make_shared<ProductNode>(30, "Local Organic Seeds", true);
+    f1->popularity=0.50; f1->rating=4.5; f1->eco_score=0.90; f1->price=8;
+    f1->fair_trade=true; f1->inclusive=true; f1->max_price=50;
+    f1->tag(2,  "Zero Hunger",           "Supports home food production");
+    f1->tag(12, "Responsible Consumption","Organic, non-GMO certified");
+    f1->tag(15, "Life on Land",          "Biodiversity preservation");
+
+    auto f2 = std::make_shared<ProductNode>(31, "Fair-Trade Coffee", true);
+    f2->popularity=0.74; f2->rating=4.6; f2->eco_score=0.80; f2->price=14;
+    f2->fair_trade=true; f2->max_price=50;
+    f2->tag(8,  "Decent Work",           "Fair wages to farmers");
+    f2->tag(12, "Responsible Consumption","Shade-grown, certified organic");
+
+    food->addChild(f1); food->addChild(f2);
+    root->addChild(food);
+
+    // ── Health & Wellbeing ───────────────────────────────────
+    auto health = std::make_shared<ProductNode>(6, "Health & Wellbeing", false);
+    health->tag(3, "Good Health", "Products supporting physical wellbeing");
+
+    auto h1 = std::make_shared<ProductNode>(40, "Pulse Oximeter", true);
+    h1->popularity=0.68; h1->rating=4.4; h1->eco_score=0.45; h1->price=22;
+    h1->inclusive=true; h1->max_price=200;
+    h1->tag(3,  "Good Health",           "Affordable health monitoring");
+    h1->tag(10, "Reduced Inequalities",  "Low-cost medical device");
+
+    auto h2 = std::make_shared<ProductNode>(41, "Menstrual Cup", true);
+    h2->popularity=0.55; h2->rating=4.7; h2->eco_score=0.93; h2->price=12;
+    h2->fair_trade=true; h2->inclusive=true; h2->max_price=200;
+    h2->tag(3,  "Good Health",           "Reusable menstrual health product");
+    h2->tag(5,  "Gender Equality",       "Accessible women's health");
+    h2->tag(12, "Responsible Consumption","93% eco-score, reusable 10yr+");
+
+    health->addChild(h1); health->addChild(h2);
+    root->addChild(health);
+
+    return root;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────────────────────
+void divider(char c = '=', int w = 72) {
+    std::cout << std::string(w, c) << "\n";
+}
+void header(const std::string& s) {
+    divider();
+    std::cout << "  " << s << "\n";
+    divider();
+}
+
+void printRecs(const ProductTree& tree, int cat_id, int top_n,
+               const std::string& label, int sdg_filter = 0) {
+    std::cout << "\n";
+    divider('-');
+    std::cout << "  Category: " << label;
+    if (sdg_filter > 0) std::cout << "  [SDG " << sdg_filter << " filter]";
+    std::cout << "  — top " << top_n << "\n";
+    divider('-');
+    std::cout << std::left
+              << std::setw(4)  << "#"
+              << std::setw(22) << "Product"
+              << std::setw(7)  << "Score"
+              << std::setw(7)  << "Pop"
+              << std::setw(7)  << "★"
+              << std::setw(7)  << "Eco"
+              << std::setw(8)  << "Price"
+              << std::setw(5)  << "FT"
+              << "SDGs\n";
+    divider('-');
+    auto recs = tree.recommend(cat_id, top_n, sdg_filter);
+    if (recs.empty()) { std::cout << "  [No results]\n"; return; }
+    for (int i = 0; i < (int)recs.size(); ++i) {
+        auto* p = recs[i];
+        std::cout << std::left
+                  << std::setw(4)  << (i+1)
+                  << std::setw(22) << p->name
+                  << std::fixed << std::setprecision(3)
+                  << std::setw(7)  << p->compositeScore()
+                  << std::setprecision(2)
+                  << std::setw(7)  << p->popularity
+                  << std::setw(7)  << p->rating
+                  << std::setw(7)  << p->eco_score
+                  << "$" << std::setw(7) << std::setprecision(0) << p->price
+                  << std::setw(5)  << (p->fair_trade ? "✓" : "")
+                  << p->sdgList() << "\n";
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  MAIN
+// ─────────────────────────────────────────────────────────────
+int main() {
+    std::cout << "\n";
+    header("PRODUCT RECOMMENDATION ENGINE — SDG-Mapped C++ Tree");
+
+    ProductTree tree(buildSDGTree());
+
+    // ── 1. Full tree ─────────────────────────────────────────
+    std::cout << "\n";
+    header("SECTION 1: Full SDG-Annotated Product Tree");
+    std::cout << "\n";
+    tree.printTree(tree.root.get());
+
+    // ── 2. SDG coverage summary ──────────────────────────────
+    std::cout << "\n";
+    header("SECTION 2: SDG Coverage Summary");
+    std::map<int,std::string> sdg_map;
+    tree.collectSDGSummary(tree.root.get(), sdg_map);
+    std::cout << "\n  SDGs addressed by this platform:\n\n";
+    for (auto& [num, lbl] : sdg_map)
+        std::cout << "  SDG " << std::setw(2) << num
+                  << " — " << lbl << "\n";
+
+    // ── 3. Standard recommendations ─────────────────────────
+    std::cout << "\n";
+    header("SECTION 3: Standard Recommendations (SDG-weighted score)");
+    std::cout << "  Formula: 0.35*pop + 0.25*(rating/5) + 0.25*eco + 0.15*affordability + 0.05*fair_trade\n";
+    printRecs(tree, 0, 5, "All Products");
+    printRecs(tree, 4, 3, "Sustainable Goods");
+    printRecs(tree, 5, 3, "Food & Agriculture");
+    printRecs(tree, 6, 2, "Health & Wellbeing");
+
+    // ── 4. SDG-filtered recommendations ─────────────────────
+    std::cout << "\n";
+    header("SECTION 4: SDG-Filtered Recommendations");
+    printRecs(tree, 0, 5, "All Products", 12);  // SDG 12 only
+    printRecs(tree, 0, 5, "All Products",  1);  // SDG 1  only
+    printRecs(tree, 0, 5, "All Products",  8);  // SDG 8  only
+
+    // ── 5. SDG impact table ─────────────────────────────────
+    std::cout << "\n";
+    header("SECTION 5: SDG Impact Table — How Code Modules Map to Goals");
+    std::cout << "\n";
+    std::cout << std::left
+              << std::setw(22) << "Code Module"
+              << std::setw(10) << "SDG"
+              << "Impact\n";
+    divider('-', 72);
+    struct Row { std::string mod, sdg, impact; };
+    std::vector<Row> rows = {
+        {"ProductNode::price",     "SDG  1", "Affordability score lifts low-cost products"},
+        {"ProductNode::inclusive", "SDG  1", "Flags products for low-income households"},
+        {"ProductNode::eco_score", "SDG 12", "Eco-label weight in composite score (25%)"},
+        {"ProductNode::fair_trade","SDG  8", "+0.05 bonus for fair-trade certified items"},
+        {"affordabilityScore()",   "SDG 10", "Normalised price → equity-aware ranking"},
+        {"compositeScore()",       "SDG  9", "Algorithmic innovation in tree traversal"},
+        {"sdg_tags vector",        "SDG 17", "Open metadata enables cross-platform data"},
+        {"recommend() + filter",   "SDG  3", "Health products surfaced by SDG 3 filter"},
+        {"collectLeaves() DFS",    "SDG  4", "Education devices discovered efficiently"},
+        {"buildSDGTree()",         "SDG 15", "Biodiversity products classified in tree"},
+    };
+    for (auto& r : rows)
+        std::cout << std::left
+                  << std::setw(22) << r.mod
+                  << std::setw(10) << r.sdg
+                  << r.impact << "\n";
+
+    // ── 6. Complexity ────────────────────────────────────────
+    std::cout << "\n";
+    header("SECTION 6: Complexity Summary");
+    std::cout << "\n";
+    std::cout << std::left
+              << std::setw(22) << "Operation"
+              << std::setw(14) << "Time"
+              << "Space\n";
+    divider('-', 50);
+    std::cout << std::setw(22) << "find() — DFS"      << std::setw(14) << "O(n)"       << "O(h)\n";
+    std::cout << std::setw(22) << "collectLeaves()"   << std::setw(14) << "O(k)"       << "O(k)\n";
+    std::cout << std::setw(22) << "recommend() sort"  << std::setw(14) << "O(k log k)" << "O(k)\n";
+    std::cout << std::setw(22) << "collectSDGSummary" << std::setw(14) << "O(n)"       << "O(s)\n";
+    std::cout << std::setw(22) << "Tree storage"      << std::setw(14) << "—"          << "O(n)\n";
+    std::cout << "\n  n=nodes  h=height  k=products in subtree  s=unique SDG tags\n";
+
+    std::cout << "\n";
+    divider();
+    std::cout << "  Done — SDG-mapped product recommendation engine complete.\n";
+    divider();
+    std::cout << "\n";
+
+    return 0;
+}
